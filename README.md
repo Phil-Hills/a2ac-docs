@@ -71,9 +71,9 @@ A2AC (Agent-to-Agent Communication) is a deterministic semantic memory and orche
 
 | Plan | Price | Includes |
 |------|-------|----------|
-| **Community** | Free | Cube validation, semantic memory (100 records), read-only ledger |
-| **Pro** | $49/month | Unlimited memory, full ledger, commerce engine, librarian |
-| **Enterprise** | $499/month | Custom agents, dedicated Pub/Sub, SLA, priority support |
+| **Sandbox** | Free | Non-production license, cube validation, 5,000 memory records, community support |
+| **Production** | $2,500/month | Commercial license, unlimited memory, full ledger, commerce engine, email support (48hr) |
+| **Enterprise** | $5,000+/month | Q-Protocol audit vault, dedicated architecture review, 4-hour SLA, custom integrations |
 
 ## Deploy
 
