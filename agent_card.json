@@ -1,0 +1,94 @@
+{
+  "name": "A2AC Workflow Agent",
+  "description": "Open infrastructure for agent-to-agent workflow automation. A2AC connects approved AI workflows across platforms — Salesforce, Azure, Google Cloud — with shared work records, semantic memory, and cube-based validation.",
+  "url": "https://api.a2ac.ai",
+  "version": "1.0.0",
+  "documentationUrl": "https://a2ac.ai/docs",
+  "provider": {
+    "organization": "A2AC LLC",
+    "url": "https://a2ac.ai"
+  },
+  "capabilities": {
+    "streaming": false,
+    "pushNotifications": false,
+    "stateTransitionHistory": true
+  },
+  "authentication": {
+    "schemes": ["bearer"],
+    "credentials": null
+  },
+  "defaultInputModes": ["application/json"],
+  "defaultOutputModes": ["application/json"],
+  "skills": [
+    {
+      "id": "cube_validate",
+      "name": "Cube Validation",
+      "description": "Validates Q-Protocol .cube files. Parses agent definitions, extracts actions, constraints, and metadata. Returns structured validation results.",
+      "tags": ["validation", "protocol", "cube"],
+      "examples": [
+        "Validate this cube file for syntax and structure",
+        "Check if this agent definition is well-formed"
+      ]
+    },
+    {
+      "id": "brain_remember",
+      "name": "Semantic Memory — Store",
+      "description": "Stores text as vector embeddings in the agent brain using Vertex AI text-embedding-004 and ChromaDB. Supports metadata tagging for retrieval.",
+      "tags": ["memory", "embeddings", "storage"],
+      "examples": [
+        "Remember this workflow result for future reference",
+        "Store this document summary with metadata"
+      ]
+    },
+    {
+      "id": "brain_recall",
+      "name": "Semantic Memory — Recall",
+      "description": "Performs semantic search across stored agent memories. Returns ranked matches with distance scores and metadata.",
+      "tags": ["memory", "search", "retrieval"],
+      "examples": [
+        "Recall any previous work related to mortgage condition review",
+        "Find similar workflow patterns from past executions"
+      ]
+    },
+    {
+      "id": "commerce_offer",
+      "name": "Commerce — Create Offer",
+      "description": "Creates a binding commercial offer for agent services. Supports pricing, currency, and expiration. Offers are tracked and can be accepted by other agents.",
+      "tags": ["commerce", "offer", "transaction"],
+      "examples": [
+        "Create an offer for document processing at $0.05 per page",
+        "List available agent service offers"
+      ]
+    },
+    {
+      "id": "ledger_record",
+      "name": "Workflow Ledger",
+      "description": "Records immutable work transactions on the Q-Chain. Tracks sender, recipient, amount, and payload. Supports mining for block finalization.",
+      "tags": ["audit", "ledger", "blockchain", "compliance"],
+      "examples": [
+        "Record this workflow completion on the ledger",
+        "Get the full audit chain for this session"
+      ]
+    },
+    {
+      "id": "librarian_organize",
+      "name": "Memory Librarian",
+      "description": "Automatically scans, clusters, and assigns unorganized memories to specialized sub-swarms. Maintains semantic hygiene across the agent brain.",
+      "tags": ["organization", "clustering", "automation"],
+      "examples": [
+        "Organize recent memories into topic clusters",
+        "Assign unprocessed entries to the right swarm"
+      ]
+    },
+    {
+      "id": "payment_subscribe",
+      "name": "Payment — Subscribe",
+      "description": "Creates Stripe checkout sessions for A2AC subscription plans. Supports Pro ($49/mo) and Enterprise ($499/mo) tiers with automatic billing.",
+      "tags": ["payment", "stripe", "subscription", "billing"],
+      "examples": [
+        "Subscribe to the A2AC Pro plan",
+        "List available pricing plans"
+      ]
+    }
+  ]
+}
