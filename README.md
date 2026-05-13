@@ -48,7 +48,7 @@ python3 scripts/04_gcp_apply.py
 ## Created by
 
 **Phil Hills** - AI Systems Architect, Seattle WA
-[philhills.ai](https://philhills.ai) | [GitHub](https://github.com/Phil-Hills) | [LinkedIn](https://linkedin.com/in/philhills)
+[philhills.ai](https://philhills.ai) | [GitHub](https://github.com/Phil-Hills) | [LinkedIn](https://www.linkedin.com/in/philhills)
 
 ---
 
