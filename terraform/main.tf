@@ -1,62 +1,103 @@
-# A2AC Sandbox - GCP Terraform Deployment
-# Deploys a non-production sandbox for validating the A2AC control-plane shape.
-# Pre-Marketplace sandbox deployment.
+# A2AC Enterprise Cloud Deploy — Terraform Root Module
+# One-click Marketplace deployment into customer's GCP project
+# Architecture: 4 Cloud Run services + Firestore + BigQuery + Pub/Sub + IAM
+
+terraform {
+  required_version = ">= 1.5"
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = "~> 5.0"
+    }
+  }
+}
+
+# ─── Variables ─────────────────────────────────────────────
 
 variable "project_id" {
-  description = "GCP project ID for the A2AC sandbox."
+  description = "Customer's GCP project ID."
   type        = string
 }
 
 variable "region" {
-  description = "GCP region for the sandbox."
+  description = "GCP region for deployment."
   type        = string
   default     = "us-central1"
 }
 
 variable "deployment_name" {
-  description = "Resource prefix for sandbox resources."
+  description = "Resource prefix (e.g. 'a2ac')."
   type        = string
-  default     = "a2ac-sandbox"
+  default     = "a2ac"
 }
 
-variable "container_image" {
-  description = "Public sandbox container image."
+variable "container_registry" {
+  description = "Container registry base path."
   type        = string
-  default     = "ghcr.io/phil-hills/a2ac-sandbox:latest"
+  default     = "ghcr.io/phil-hills"
 }
 
-variable "allow_public_invoker" {
-  description = "Allow unauthenticated access for sandbox testing."
-  type        = bool
-  default     = true
+variable "image_tag" {
+  description = "Container image tag."
+  type        = string
+  default     = "latest"
 }
 
-variable "enable_bigquery_receipts" {
-  description = "Enable BigQuery receipt tables."
+variable "enable_vertex_ai" {
+  description = "Enable optional Vertex AI integration."
   type        = bool
-  default     = true
+  default     = false
 }
 
-variable "enable_pubsub_events" {
-  description = "Enable Pub/Sub event topic."
-  type        = bool
-  default     = true
-}
+# ─── Provider ──────────────────────────────────────────────
 
 provider "google" {
   project = var.project_id
   region  = var.region
 }
 
-# --- Cloud Run Sandbox Service ---
+# ─── IAM: Service Account ─────────────────────────────────
 
-resource "google_cloud_run_v2_service" "a2ac_sandbox" {
-  name     = "${var.deployment_name}"
+resource "google_service_account" "a2ac_runtime" {
+  account_id   = "${var.deployment_name}-runtime"
+  display_name = "A2AC Runtime Service Account"
+  project      = var.project_id
+}
+
+resource "google_project_iam_member" "bigquery_writer" {
+  project = var.project_id
+  role    = "roles/bigquery.dataEditor"
+  member  = "serviceAccount:${google_service_account.a2ac_runtime.email}"
+}
+
+resource "google_project_iam_member" "firestore_user" {
+  project = var.project_id
+  role    = "roles/datastore.user"
+  member  = "serviceAccount:${google_service_account.a2ac_runtime.email}"
+}
+
+resource "google_project_iam_member" "pubsub_publisher" {
+  project = var.project_id
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:${google_service_account.a2ac_runtime.email}"
+}
+
+resource "google_project_iam_member" "secret_accessor" {
+  project = var.project_id
+  role    = "roles/secretmanager.secretAccessor"
+  member  = "serviceAccount:${google_service_account.a2ac_runtime.email}"
+}
+
+# ─── Cloud Run: Cube Hub ───────────────────────────────────
+
+resource "google_cloud_run_v2_service" "cube_hub" {
+  name     = "${var.deployment_name}-cube-hub"
   location = var.region
 
   template {
+    service_account = google_service_account.a2ac_runtime.email
     containers {
-      image = var.container_image
+      image = "${var.container_registry}/a2ac-gateway:${var.image_tag}"
       ports {
         container_port = 8080
       }
@@ -68,115 +109,234 @@ resource "google_cloud_run_v2_service" "a2ac_sandbox" {
         name  = "DEPLOYMENT_NAME"
         value = var.deployment_name
       }
+      env {
+        name  = "SERVICE_ROLE"
+        value = "cube-hub"
+      }
+      resources {
+        limits = { cpu = "1", memory = "512Mi" }
+      }
     }
     scaling {
       min_instance_count = 0
-      max_instance_count = 2
+      max_instance_count = 4
     }
   }
 }
 
-resource "google_cloud_run_v2_service_iam_member" "public_invoker" {
-  count    = var.allow_public_invoker ? 1 : 0
-  project  = var.project_id
+# ─── Cloud Run: Q Gateway ─────────────────────────────────
+
+resource "google_cloud_run_v2_service" "q_gateway" {
+  name     = "${var.deployment_name}-q-gateway"
   location = var.region
-  name     = google_cloud_run_v2_service.a2ac_sandbox.name
-  role     = "roles/run.invoker"
-  member   = "allUsers"
+
+  template {
+    service_account = google_service_account.a2ac_runtime.email
+    containers {
+      image = "${var.container_registry}/a2ac-gateway:${var.image_tag}"
+      ports {
+        container_port = 8080
+      }
+      env {
+        name  = "PROJECT_ID"
+        value = var.project_id
+      }
+      env {
+        name  = "DEPLOYMENT_NAME"
+        value = var.deployment_name
+      }
+      env {
+        name  = "SERVICE_ROLE"
+        value = "q-gateway"
+      }
+      resources {
+        limits = { cpu = "1", memory = "512Mi" }
+      }
+    }
+    scaling {
+      min_instance_count = 0
+      max_instance_count = 4
+    }
+  }
 }
 
-# --- Firestore for Cube State ---
+# ─── Cloud Run: Agent Registry / Executor ──────────────────
 
-resource "google_firestore_database" "a2ac_sandbox_state" {
+resource "google_cloud_run_v2_service" "agent_registry" {
+  name     = "${var.deployment_name}-agent-registry"
+  location = var.region
+
+  template {
+    service_account = google_service_account.a2ac_runtime.email
+    containers {
+      image = "${var.container_registry}/a2ac-executor:${var.image_tag}"
+      ports {
+        container_port = 8080
+      }
+      env {
+        name  = "PROJECT_ID"
+        value = var.project_id
+      }
+      env {
+        name  = "DEPLOYMENT_NAME"
+        value = var.deployment_name
+      }
+      env {
+        name  = "SERVICE_ROLE"
+        value = "agent-registry"
+      }
+      resources {
+        limits = { cpu = "2", memory = "1Gi" }
+      }
+    }
+    scaling {
+      min_instance_count = 0
+      max_instance_count = 8
+    }
+  }
+}
+
+# ─── Cloud Run: Receipt API ────────────────────────────────
+
+resource "google_cloud_run_v2_service" "receipt_api" {
+  name     = "${var.deployment_name}-receipt-api"
+  location = var.region
+
+  template {
+    service_account = google_service_account.a2ac_runtime.email
+    containers {
+      image = "${var.container_registry}/a2ac-receipt-api:${var.image_tag}"
+      ports {
+        container_port = 8080
+      }
+      env {
+        name  = "PROJECT_ID"
+        value = var.project_id
+      }
+      env {
+        name  = "DEPLOYMENT_NAME"
+        value = var.deployment_name
+      }
+      env {
+        name  = "SERVICE_ROLE"
+        value = "receipt-api"
+      }
+      env {
+        name  = "BQ_DATASET"
+        value = google_bigquery_dataset.receipts.dataset_id
+      }
+      resources {
+        limits = { cpu = "1", memory = "512Mi" }
+      }
+    }
+    scaling {
+      min_instance_count = 0
+      max_instance_count = 4
+    }
+  }
+}
+
+# ─── Firestore: Cube State + Workflow Metadata ─────────────
+
+resource "google_firestore_database" "cube_state" {
   project     = var.project_id
   name        = "${var.deployment_name}-state"
   location_id = var.region
   type        = "FIRESTORE_NATIVE"
 }
 
-# --- BigQuery for Receipts ---
+# ─── BigQuery: Receipt Ledger (Immutable) ──────────────────
 
-resource "google_bigquery_dataset" "a2ac_sandbox_receipts" {
-  count      = var.enable_bigquery_receipts ? 1 : 0
+resource "google_bigquery_dataset" "receipts" {
   dataset_id = replace("${var.deployment_name}_receipts", "-", "_")
   project    = var.project_id
   location   = var.region
 }
 
 resource "google_bigquery_table" "receipt_events" {
-  count      = var.enable_bigquery_receipts ? 1 : 0
-  dataset_id = google_bigquery_dataset.a2ac_sandbox_receipts[0].dataset_id
+  dataset_id = google_bigquery_dataset.receipts.dataset_id
   table_id   = "receipt_events"
   project    = var.project_id
 
   schema = jsonencode([
-    { name = "receipt_id",       type = "STRING",    mode = "REQUIRED" },
-    { name = "event_type",       type = "STRING",    mode = "REQUIRED" },
-    { name = "status",           type = "STRING",    mode = "REQUIRED" },
-    { name = "q_command",        type = "STRING",    mode = "NULLABLE" },
-    { name = "canonical_command",type = "STRING",    mode = "NULLABLE" },
-    { name = "cube_id",          type = "STRING",    mode = "NULLABLE" },
-    { name = "result_cube_id",   type = "STRING",    mode = "NULLABLE" },
-    { name = "agent_id",         type = "STRING",    mode = "NULLABLE" },
-    { name = "created_at",       type = "TIMESTAMP", mode = "REQUIRED" },
-    { name = "runtime_policy",   type = "STRING",    mode = "NULLABLE" },
-    { name = "metadata",         type = "JSON",      mode = "NULLABLE" },
+    { name = "receipt_id", type = "STRING", mode = "REQUIRED" },
+    { name = "event_type", type = "STRING", mode = "REQUIRED" },
+    { name = "status", type = "STRING", mode = "REQUIRED" },
+    { name = "q_command", type = "STRING", mode = "NULLABLE" },
+    { name = "canonical_command", type = "STRING", mode = "NULLABLE" },
+    { name = "cube_id", type = "STRING", mode = "NULLABLE" },
+    { name = "result_cube_id", type = "STRING", mode = "NULLABLE" },
+    { name = "agent_id", type = "STRING", mode = "NULLABLE" },
+    { name = "blake3_hash", type = "STRING", mode = "NULLABLE" },
+    { name = "created_at", type = "TIMESTAMP", mode = "REQUIRED" },
+    { name = "runtime_policy", type = "STRING", mode = "NULLABLE" },
+    { name = "metadata", type = "JSON", mode = "NULLABLE" },
   ])
 }
 
 resource "google_bigquery_table" "workflow_runs" {
-  count      = var.enable_bigquery_receipts ? 1 : 0
-  dataset_id = google_bigquery_dataset.a2ac_sandbox_receipts[0].dataset_id
+  dataset_id = google_bigquery_dataset.receipts.dataset_id
   table_id   = "workflow_runs"
   project    = var.project_id
 
   schema = jsonencode([
-    { name = "workflow_id",      type = "STRING",    mode = "REQUIRED" },
-    { name = "status",           type = "STRING",    mode = "REQUIRED" },
-    { name = "input_cube_id",    type = "STRING",    mode = "NULLABLE" },
-    { name = "result_cube_id",   type = "STRING",    mode = "NULLABLE" },
-    { name = "agent_id",         type = "STRING",    mode = "NULLABLE" },
-    { name = "started_at",       type = "TIMESTAMP", mode = "REQUIRED" },
-    { name = "completed_at",     type = "TIMESTAMP", mode = "NULLABLE" },
-    { name = "runtime_policy",   type = "STRING",    mode = "NULLABLE" },
-    { name = "metadata",         type = "JSON",      mode = "NULLABLE" },
+    { name = "workflow_id", type = "STRING", mode = "REQUIRED" },
+    { name = "status", type = "STRING", mode = "REQUIRED" },
+    { name = "input_cube_id", type = "STRING", mode = "NULLABLE" },
+    { name = "result_cube_id", type = "STRING", mode = "NULLABLE" },
+    { name = "agent_id", type = "STRING", mode = "NULLABLE" },
+    { name = "started_at", type = "TIMESTAMP", mode = "REQUIRED" },
+    { name = "completed_at", type = "TIMESTAMP", mode = "NULLABLE" },
+    { name = "runtime_policy", type = "STRING", mode = "NULLABLE" },
+    { name = "metadata", type = "JSON", mode = "NULLABLE" },
   ])
 }
 
-# --- Pub/Sub for Workflow Events ---
+# ─── Pub/Sub: Workflow Events ──────────────────────────────
 
-resource "google_pubsub_topic" "a2ac_sandbox_events" {
-  count   = var.enable_pubsub_events ? 1 : 0
-  name    = "${var.deployment_name}-events"
+resource "google_pubsub_topic" "workflow_events" {
+  name    = "${var.deployment_name}-workflow-events"
   project = var.project_id
 }
 
-# --- IAM Service Account ---
-
-resource "google_service_account" "a2ac_sandbox_runtime" {
-  account_id   = "${var.deployment_name}-rt"
-  display_name = "A2AC Sandbox Runtime"
-  project      = var.project_id
+resource "google_pubsub_topic" "marketplace_entitlements" {
+  name    = "${var.deployment_name}-entitlements"
+  project = var.project_id
 }
 
-# --- Outputs ---
+# ─── Outputs ───────────────────────────────────────────────
 
-output "sandbox_url" {
-  value = google_cloud_run_v2_service.a2ac_sandbox.uri
+output "cube_hub_url" {
+  value       = google_cloud_run_v2_service.cube_hub.uri
+  description = "A2AC Cube Hub URL"
+}
+
+output "q_gateway_url" {
+  value       = google_cloud_run_v2_service.q_gateway.uri
+  description = "Q Protocol Gateway URL"
+}
+
+output "agent_registry_url" {
+  value       = google_cloud_run_v2_service.agent_registry.uri
+  description = "Agent Registry / Executor URL"
+}
+
+output "receipt_api_url" {
+  value       = google_cloud_run_v2_service.receipt_api.uri
+  description = "Receipt API URL"
 }
 
 output "agent_card_url" {
-  value = "${google_cloud_run_v2_service.a2ac_sandbox.uri}/.well-known/agent.json"
+  value       = "${google_cloud_run_v2_service.q_gateway.uri}/.well-known/agent.json"
+  description = "A2A Protocol Agent Card"
 }
 
 output "receipt_dataset" {
-  value = var.enable_bigquery_receipts ? google_bigquery_dataset.a2ac_sandbox_receipts[0].dataset_id : "disabled"
-}
-
-output "workflow_topic" {
-  value = var.enable_pubsub_events ? google_pubsub_topic.a2ac_sandbox_events[0].name : "disabled"
+  value       = google_bigquery_dataset.receipts.dataset_id
+  description = "BigQuery receipt ledger dataset"
 }
 
 output "service_account_email" {
-  value = google_service_account.a2ac_sandbox_runtime.email
+  value       = google_service_account.a2ac_runtime.email
+  description = "Runtime service account"
 }
